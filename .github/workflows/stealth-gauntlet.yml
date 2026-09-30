@@ -1,0 +1,41 @@
+name: stealth-gauntlet
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gauntlet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install browsers
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          echo "── patchright ──"
+          patchright install --with-deps chromium
+          echo "── camoufox ──"
+          python -m camoufox fetch
+
+      - name: Run gauntlet
+        run: |
+          mkdir -p /tmp/gauntlet
+          python ci/gauntlet.py all
+          echo
+          echo "── artifacts ──"
+          ls -la /tmp/gauntlet/
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stealth-gauntlet
+          path: /tmp/gauntlet/
+          retention-days: 30
+          if-no-files-found: warn
