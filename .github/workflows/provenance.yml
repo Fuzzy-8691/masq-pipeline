@@ -1,0 +1,118 @@
+name: provenance-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prove:
+    runs-on: macos-13
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: System tools
+        run: |
+          brew install aria2 zstd || true
+
+      - name: Install patchright library ONLY (no browser download)
+        run: |
+          pip install --upgrade pip
+          pip install patchright==1.63.0
+          echo "── checking for any pre-existing browser cache ──"
+          ls -la ~/Library/Caches/ms-playwright/ 2>/dev/null || echo "(empty — good)"
+
+      - name: Fetch pack from TeraBox Account 3
+        env:
+          TB3_COOKIE: ${{ secrets.TERABOX_3_COOKIE }}
+        run: python ci/fetch_pack.py
+
+      - name: Locate Chromium inside the pack
+        run: |
+          echo "── finding the Chromium binary ──"
+          CHROME=$(find /tmp/pack_extract/patchright -type f -name "Google Chrome for Testing" 2>/dev/null | head -1)
+          if [ -z "$CHROME" ]; then
+            echo "!! no chromium binary found — tree:"
+            find /tmp/pack_extract/patchright -maxdepth 6 -type f | head -40
+            exit 1
+          fi
+          echo "found: $CHROME"
+          file "$CHROME"
+          du -sh /tmp/pack_extract/patchright
+          echo
+          echo "── pack venv python (should be Mach-O x86_64) ──"
+          file /tmp/pack_extract/venv/bin/python* 2>/dev/null | head -3
+
+      - name: Launch the pack's Chromium via patchright
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /tmp/pack_extract/patchright
+        run: |
+          mkdir -p /tmp/proof
+          cat > /tmp/prove.py <<'PY'
+          import asyncio, json, os, datetime
+          from pathlib import Path
+          from patchright.async_api import async_playwright
+
+          async def main():
+              out = Path("/tmp/proof")
+              out.mkdir(exist_ok=True)
+
+              async with async_playwright() as p:
+                  exe = p.chromium.executable_path
+                  print(f"[*] PLAYWRIGHT_BROWSERS_PATH = {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+                  print(f"[*] patchright chose executable: {exe}")
+                  assert exe.startswith("/tmp/pack_extract/"), \
+                      f"WRONG BINARY — patchright used {exe}"
+                  print("[*] CONFIRMED: executable lives inside the TeraBox pack")
+                  print()
+
+                  browser = await p.chromium.launch(headless=True)
+                  try:
+                      print(f"[*] browser version: {browser.version}")
+                      page = await browser.new_page()
+                      await page.goto("https://example.com",
+                                      wait_until="domcontentloaded",
+                                      timeout=30000)
+                      title = await page.title()
+                      ua = await page.evaluate("() => navigator.userAgent")
+                      wd = await page.evaluate("() => navigator.webdriver")
+
+                      print(f"[*] page title: {title}")
+                      print(f"[*] user-agent: {ua}")
+                      print(f"[*] navigator.webdriver: {wd}")
+
+                      await page.screenshot(path=str(out / "example_com.png"),
+                                            full_page=True)
+
+                      proof = {
+                          "executable_path": exe,
+                          "browser_version": browser.version,
+                          "page_title": title,
+                          "user_agent": ua,
+                          "webdriver": wd,
+                          "PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
+                          "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                      }
+                      (out / "proof.json").write_text(json.dumps(proof, indent=2))
+                      print("[*] proof.json written")
+                  finally:
+                      await browser.close()
+
+          asyncio.run(main())
+          PY
+          python /tmp/prove.py
+          echo
+          echo "── proof artifacts ──"
+          ls -la /tmp/proof/
+
+      - name: Upload proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-proof
+          path: /tmp/proof/
+          retention-days: 30
+          if-no-files-found: warn
