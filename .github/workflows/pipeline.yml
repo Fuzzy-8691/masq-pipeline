@@ -40,6 +40,14 @@ on:
         description: 'Encryption passphrase (per-run, not stored)'
         required: true
         type: string
+      browser:
+        description: 'Browser engine'
+        required: false
+        default: 'patchright'
+        type: choice
+        options:
+          - patchright
+          - camoufox
       remote_dir:
         description: 'TeraBox destination folder (ghost base)'
         required: false
@@ -76,7 +84,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Chromium (patchright)
-        run: patchright install --with-deps chromium
+        run: |
+          patchright install --with-deps chromium
+          python -m camoufox fetch || true
 
       - name: Write .env from secrets
         env:
@@ -119,6 +129,7 @@ jobs:
           MANIFEST_PATH: ${{ github.workspace }}/uploads.csv
           DOWNLOAD_DIR: /tmp/pipeline_downloads
           YTDLP_PATH: yt-dlp
+          CAPTURE_BROWSER: ${{ inputs.browser }}
         run: |
           # mask the passphrase so it doesn't leak into raw logs
           echo "::add-mask::${{ inputs.passphrase }}"

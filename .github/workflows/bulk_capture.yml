@@ -33,6 +33,14 @@ on:
         required: true
         default: '10'
         type: string
+      browser:
+        description: 'Browser engine'
+        required: false
+        default: 'patchright'
+        type: choice
+        options:
+          - patchright
+          - camoufox
 
 concurrency:
   group: bulk-capture
@@ -106,6 +114,7 @@ jobs:
           MANIFEST_PATH: ${{ github.workspace }}/uploads_S${{ matrix.season }}.csv
           DOWNLOAD_DIR: /tmp/bulk_downloads
           YTDLP_PATH: yt-dlp
+          CAPTURE_BROWSER: ${{ inputs.browser }}
         run: |
           echo "::add-mask::${{ secrets.BULK_PASSPHRASE }}"
           mkdir -p /tmp/bulk_downloads
