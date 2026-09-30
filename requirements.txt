@@ -1,0 +1,5 @@
+patchright>=1.63
+requests>=2.31
+cryptography>=44
+python-dotenv>=1.0
+yt-dlp>=2024.1

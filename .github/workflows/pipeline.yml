@@ -1,0 +1,136 @@
+name: pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Show/movie URL'
+        required: true
+        type: string
+      mode:
+        description: 'Mode'
+        required: true
+        default: 'ghost'
+        type: choice
+        options:
+          - single
+          - ghost
+          - ghost-batch
+      show:
+        description: 'Show name for filename'
+        required: false
+        default: 'GH_Capture'
+        type: string
+      season:
+        description: 'Season number'
+        required: false
+        default: '1'
+        type: string
+      episodes:
+        description: 'Episodes (e.g. 1 or 1-5)'
+        required: false
+        default: '1'
+        type: string
+      wait:
+        description: 'Seconds to wait for player'
+        required: false
+        default: '25'
+        type: string
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg curl aria2
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Chromium (patchright)
+        run: patchright install chromium
+
+      - name: Write .env from secrets
+        env:
+          TB1_COOKIE: ${{ secrets.TERABOX_1_COOKIE }}
+          TB2_COOKIE: ${{ secrets.TERABOX_2_COOKIE }}
+          TB3_COOKIE: ${{ secrets.TERABOX_3_COOKIE }}
+          TB1_USER: ${{ secrets.TERABOX_1_USERNAME }}
+          TB2_USER: ${{ secrets.TERABOX_2_USERNAME }}
+          TB3_USER: ${{ secrets.TERABOX_3_USERNAME }}
+          TB1_PASS: ${{ secrets.TERABOX_1_PASSWORD }}
+          TB2_PASS: ${{ secrets.TERABOX_2_PASSWORD }}
+          TB3_PASS: ${{ secrets.TERABOX_3_PASSWORD }}
+          DISCORD_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          {
+            echo "TERABOX_1_USERNAME=$TB1_USER"
+            echo "TERABOX_1_PASSWORD=$TB1_PASS"
+            echo "TERABOX_1_COOKIE=$TB1_COOKIE"
+            echo "TERABOX_2_USERNAME=$TB2_USER"
+            echo "TERABOX_2_PASSWORD=$TB2_PASS"
+            echo "TERABOX_2_COOKIE=$TB2_COOKIE"
+            echo "TERABOX_3_USERNAME=$TB3_USER"
+            echo "TERABOX_3_PASSWORD=$TB3_PASS"
+            echo "TERABOX_3_COOKIE=$TB3_COOKIE"
+            if [ -n "$DISCORD_URL" ]; then
+              echo "DISCORD_WEBHOOK_URL=$DISCORD_URL"
+              echo "NOTIFY=discord"
+            else
+              echo "NOTIFY=none"
+            fi
+          } > .env
+          chmod 600 .env
+          echo "wrote .env with $(wc -l < .env) lines"
+
+      - name: Run pipeline
+        env:
+          EE_TB_PASSPHRASE: ${{ secrets.EE_TB_PASSPHRASE }}
+          PIPELINE_NONINTERACTIVE: '1'
+          PIPELINE_HEADLESS_SNIFF: '1'
+          MANIFEST_PATH: ${{ github.workspace }}/uploads.csv
+          DOWNLOAD_DIR: /tmp/pipeline_downloads
+          YTDLP_PATH: yt-dlp
+        run: |
+          MODE_FLAG=""
+          case "${{ inputs.mode }}" in
+            ghost)       MODE_FLAG="--ghost" ;;
+            ghost-batch) MODE_FLAG="--ghost-batch" ;;
+          esac
+
+          python Browser_dual_account_C.py \
+            --url "${{ inputs.url }}" \
+            --show "${{ inputs.show }}" \
+            --season "${{ inputs.season }}" \
+            --episodes "${{ inputs.episodes }}" \
+            --wait "${{ inputs.wait }}" \
+            --headless \
+            $MODE_FLAG
+
+      - name: Upload manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uploads-manifest
+          path: uploads.csv
+          retention-days: 30
+          if-no-files-found: ignore

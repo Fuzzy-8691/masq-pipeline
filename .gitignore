@@ -1,0 +1,36 @@
+# ── secrets ──
+.env
+*.env.bak
+
+# ── local-only working dirs ──
+_cache/
+_pack/
+.bak/
+*.bak
+*.bak2
+*.bak3
+*.bak4
+*.bak5
+*.bakCI
+*.bakC_http
+*.baseline
+*.pre
+
+# ── python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# ── macOS / NTFS noise ──
+.DS_Store
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.AppleDouble
+
+# ── per-run outputs ──
+uploads.csv
+*.log
