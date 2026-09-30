@@ -68,29 +68,6 @@ jobs:
           echo "========================================="
           echo
 
-      - name: Publish URL to issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          URL="${{ steps.tunnel.outputs.tunnel_url }}"
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
-            --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
-
-          if [ -z "$ISSUE" ]; then
-            gh issue create \
-              --repo ${{ github.repository }} \
-              --title "PUPPETMASTER LIVE" \
-              --body "Auto-managed. Do not close. Workflow updates the last comment with the live URL."
-            sleep 2
-            ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
-              --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
-          fi
-
-          gh api "repos/${{ github.repository }}/issues/$ISSUE/comments" \
-            -f body="LIVE $TIMESTAMP — $URL — expires in ${{ inputs.duration }} min"
-
       - name: Keep alive
         run: |
           DURATION="${{ inputs.duration }}"
@@ -101,14 +78,3 @@ jobs:
             echo "[$i/$DURATION min] live: $URL"
           done
 
-      - name: Mark offline
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
-            --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
-          if [ -n "$ISSUE" ]; then
-            gh api "repos/${{ github.repository }}/issues/$ISSUE/comments" \
-              -f body="OFFLINE $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          fi
