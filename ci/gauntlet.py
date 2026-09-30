@@ -18,6 +18,11 @@ SITES = [
     ("canvas",      "https://browserleaks.com/canvas",               8),
     ("pixelscan",   "https://pixelscan.net/",                       12),
     ("incolumitas", "https://bot.incolumitas.com/",                 10),
+    # ── harder targets ──
+    ("zillow",      "https://www.zillow.com/homes/for_sale/",       10),
+    ("ticketmaster","https://www.ticketmaster.com/",                10),
+    ("nopecha-cf",  "https://nopecha.com/demo/cloudflare",          12),
+    ("nopecha-rc",  "https://nopecha.com/demo/recaptcha",           12),
 ]
 
 NAV_TIMEOUT_MS = 45000
@@ -34,6 +39,30 @@ def extract_verdicts_sannysoft(text):
                 if len(parts) >= 3:
                     out[key] = " ".join(parts[-2:])
     return out
+
+
+def extract_verdicts_block(text):
+    """Detect whether we got blocked or got real content."""
+    low = text.lower()
+    blocks = [
+        "access denied", "are you a robot", "unusual traffic",
+        "verify you are human", "please verify", "cf-chl",
+        "checking your browser", "just a moment",
+        "px-captcha", "press & hold", "blocked",
+        "bot detection", "attention required",
+    ]
+    hits = [b for b in blocks if b in low]
+    ok = [
+        "for sale", "sign in", "search", "tickets", "homes",
+        "buy", "sell", "login",
+    ]
+    ok_hits = [o for o in ok if o in low]
+    return {
+        "blocked": bool(hits),
+        "block_signals": hits[:3],
+        "content_signals": ok_hits[:3],
+        "text_length": len(text),
+    }
 
 
 def extract_verdicts_creepjs(text):
@@ -105,6 +134,8 @@ async def run_patchright():
                 row["verdicts"] = extract_verdicts_sannysoft(text)
             if label == "creepjs":
                 row["verdicts"] = extract_verdicts_creepjs(text)
+            if label in ("zillow", "ticketmaster", "nopecha-cf", "nopecha-rc"):
+                row["verdicts"] = extract_verdicts_block(text)
             (OUT / f"patchright_{label}.txt").write_text(text[:8000])
             results.append(row)
             print(f"  title={title!r}  ms={ms}  err={err or 'none'}")
@@ -137,6 +168,8 @@ async def run_camoufox():
                 row["verdicts"] = extract_verdicts_sannysoft(text)
             if label == "creepjs":
                 row["verdicts"] = extract_verdicts_creepjs(text)
+            if label in ("zillow", "ticketmaster", "nopecha-cf", "nopecha-rc"):
+                row["verdicts"] = extract_verdicts_block(text)
             (OUT / f"camoufox_{label}.txt").write_text(text[:8000])
             results.append(row)
             print(f"  title={title!r}  ms={ms}  err={err or 'none'}")
