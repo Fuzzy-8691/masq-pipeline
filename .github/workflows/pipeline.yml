@@ -36,6 +36,10 @@ on:
         required: false
         default: '25'
         type: string
+      passphrase:
+        description: 'Encryption passphrase (per-run, not stored)'
+        required: true
+        type: string
 
 concurrency:
   group: pipeline
@@ -104,13 +108,16 @@ jobs:
 
       - name: Run pipeline
         env:
-          EE_TB_PASSPHRASE: ${{ secrets.EE_TB_PASSPHRASE }}
           PIPELINE_NONINTERACTIVE: '1'
           PIPELINE_HEADLESS_SNIFF: '1'
           MANIFEST_PATH: ${{ github.workspace }}/uploads.csv
           DOWNLOAD_DIR: /tmp/pipeline_downloads
           YTDLP_PATH: yt-dlp
         run: |
+          # mask the passphrase so it doesn't leak into raw logs
+          echo "::add-mask::${{ inputs.passphrase }}"
+          export EE_TB_PASSPHRASE="${{ inputs.passphrase }}"
+
           MODE_FLAG=""
           case "${{ inputs.mode }}" in
             ghost)       MODE_FLAG="--ghost" ;;

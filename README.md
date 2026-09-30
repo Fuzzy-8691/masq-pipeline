@@ -9,7 +9,7 @@ Add these repo secrets under Settings -> Secrets and variables -> Actions:
 - `TERABOX_1_COOKIE` - account 1 ndus value
 - `TERABOX_2_COOKIE` - account 2 ndus value
 - `TERABOX_3_COOKIE` - account 3 ndus value
-- `EE_TB_PASSPHRASE` - your encryption passphrase (KEEP SAFE)
+- ~~`EE_TB_PASSPHRASE`~~ -> now a per-run workflow input, not a secret
 
 Optional (only needed if you want username/password fallback):
 - `TERABOX_1_USERNAME`, `TERABOX_1_PASSWORD`
