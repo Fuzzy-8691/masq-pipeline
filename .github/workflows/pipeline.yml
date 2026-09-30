@@ -71,7 +71,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Chromium (patchright)
-        run: patchright install chromium
+        run: patchright install --with-deps chromium
 
       - name: Write .env from secrets
         env:
