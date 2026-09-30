@@ -34,3 +34,20 @@ venv/
 # ── per-run outputs ──
 uploads.csv
 *.log
+
+# ── big local dirs (never commit these) ──
+patchright/
+camoufox_data/
+camoufox/
+bin/
+_pack/
+_cache/
+
+# ── other scripts, not part of the cloud pipeline ──
+benchmark.py
+Browser_dual_account.py
+Browser_dual_account_A.py
+Browser_dual_account_B.py
+_build_pack.py
+_upload_pack.py
+_pack_config.json

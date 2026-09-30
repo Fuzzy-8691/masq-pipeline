@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# masq - trigger GitHub Actions workflows from the terminal
+set -euo pipefail
+
+REPO="Fuzzy-8691/masq-pipeline"
+
+C='\033[96m'; D='\033[90m'; G='\033[92m'; Y='\033[93m'; R='\033[91m'
+B='\033[1m'; X='\033[0m'
+
+header() {
+  echo
+  echo -e "  ${C}${B}-- $* -----------------------------${X}"
+}
+
+ask() {
+  local prompt="$1" default="${2:-}"
+  local hint=""
+  [ -n "$default" ] && hint=" ${D}[$default]${X}"
+  echo -ne "  ${C}${B}*${X} ${prompt}${hint}  ${D}>${X} " >&2
+  local ans
+  read -r ans
+  echo "${ans:-$default}"
+}
+
+ask_secret() {
+  local prompt="$1"
+  echo -ne "  ${C}${B}*${X} ${prompt}  ${D}>${X} " >&2
+  local ans
+  read -rs ans
+  echo "" >&2
+  echo "$ans"
+}
+
+require_gh() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo -e "  ${R}x${X} gh CLI not installed."
+    echo -e "    brew install gh && gh auth login"
+    exit 1
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo -e "  ${R}x${X} gh not authenticated."
+    echo -e "    gh auth login"
+    exit 1
+  fi
+}
+
+watch_latest() {
+  sleep 3
+  local run_id
+  run_id=$(gh run list --repo "$REPO" --limit 1 --json databaseId \
+            --jq '.[0].databaseId' 2>/dev/null || true)
+  if [ -z "$run_id" ]; then
+    echo -e "  ${Y}!${X} Could not find the run. Check github.com."
+    return
+  fi
+  echo
+  echo -e "  ${G}+${X} run id: ${B}$run_id${X}"
+  echo -e "  ${D}watching live... Ctrl+C to detach (job keeps running)${X}"
+  echo
+  gh run watch "$run_id" --repo "$REPO" --exit-status || true
+}
+
+cmd_capture() {
+  require_gh
+  header "CAPTURE"
+
+  local url mode show season episodes wait pass remote_dir
+  url=$(ask "lookmovie2 URL")
+  [ -z "$url" ] && { echo -e "  ${R}x${X} url required"; exit 1; }
+
+  echo -ne "  ${C}${B}*${X} mode   ${C}${B}o${X} 1 ghost   ${D}o${X} 2 single   ${D}o${X} 3 ghost-batch  ${D}>${X} " >&2
+  read -r m
+  case "${m:-1}" in
+    1) mode="ghost" ;;
+    2) mode="single" ;;
+    3) mode="ghost-batch" ;;
+    *) mode="ghost" ;;
+  esac
+
+  show=$(ask "show name" "GH_Capture")
+  season=$(ask "season" "1")
+  episodes=$(ask "episodes (e.g. 1 or 1-5)" "1")
+  wait=$(ask "seconds to wait for player" "25")
+  remote_dir=$(ask "remote dir (ghost base)" "/_Rescue_Uploads/encrypted/Ghosts")
+  pass=$(ask_secret "passphrase (masked)")
+
+  if [ -z "$pass" ]; then
+    echo -e "  ${R}x${X} passphrase required"
+    exit 1
+  fi
+
+  header "TRIGGER"
+  echo -e "  ${D}url:${X}         $url"
+  echo -e "  ${D}mode:${X}        $mode"
+  echo -e "  ${D}show:${X}        $show"
+  echo -e "  ${D}season:${X}      $season"
+  echo -e "  ${D}episodes:${X}    $episodes"
+  echo -e "  ${D}remote_dir:${X}  $remote_dir"
+  echo -ne "  ${C}${B}*${X} send?  ${C}${B}Y${X}  ${D}n${X}  ${D}>${X} " >&2
+  read -r go
+  case "${go:-y}" in
+    y|Y|"") ;;
+    *) echo -e "  ${D}cancelled${X}"; exit 0 ;;
+  esac
+
+  gh workflow run pipeline.yml --repo "$REPO" \
+    -f url="$url" \
+    -f mode="$mode" \
+    -f show="$show" \
+    -f season="$season" \
+    -f episodes="$episodes" \
+    -f wait="$wait" \
+    -f remote_dir="$remote_dir" \
+    -f passphrase="$pass"
+
+  watch_latest
+}
+
+cmd_reconstruct() {
+  require_gh
+  header "RECONSTRUCT"
+
+  local ghost pass dest_acc dest_dir keep
+  ghost=$(ask "ghost folder path")
+  [ -z "$ghost" ] && { echo -e "  ${R}x${X} ghost folder required"; exit 1; }
+
+  pass=$(ask_secret "passphrase (masked)")
+  [ -z "$pass" ] && { echo -e "  ${R}x${X} passphrase required"; exit 1; }
+
+  echo -ne "  ${C}${B}*${X} dest account   1   2   3   ${D}>${X} " >&2
+  read -r da
+  dest_acc="${da:-1}"
+
+  dest_dir=$(ask "dest folder" "/decrypted")
+
+  echo -ne "  ${C}${B}*${X} keep shards?  y/n  ${D}>${X} " >&2
+  read -r ks
+  case "${ks:-y}" in
+    n|N|no|NO) keep="false" ;;
+    *) keep="true" ;;
+  esac
+
+  header "TRIGGER"
+  echo -e "  ${D}ghost:${X}       $ghost"
+  echo -e "  ${D}dest:${X}        account $dest_acc : $dest_dir"
+  echo -e "  ${D}keep shards:${X} $keep"
+  echo -ne "  ${C}${B}*${X} send?  ${C}${B}Y${X}  ${D}n${X}  ${D}>${X} " >&2
+  read -r go
+  case "${go:-y}" in
+    y|Y|"") ;;
+    *) echo -e "  ${D}cancelled${X}"; exit 0 ;;
+  esac
+
+  gh workflow run reconstruct.yml --repo "$REPO" \
+    -f ghost_folder="$ghost" \
+    -f passphrase="$pass" \
+    -f dest_account="$dest_acc" \
+    -f dest_dir="$dest_dir" \
+    -f keep_shards="$keep"
+
+  watch_latest
+}
+
+cmd_status() {
+  require_gh
+  header "RECENT RUNS"
+  gh run list --repo "$REPO" --limit 10
+}
+
+cmd_watch() {
+  require_gh
+  watch_latest
+}
+
+cmd_logs() {
+  require_gh
+  local run_id="${1:-}"
+  if [ -z "$run_id" ]; then
+    run_id=$(gh run list --repo "$REPO" --limit 1 --json databaseId \
+             --jq '.[0].databaseId')
+  fi
+  header "LOGS: $run_id"
+  gh run view "$run_id" --repo "$REPO" --log
+}
+
+cmd_cancel() {
+  require_gh
+  header "CANCEL"
+  gh run list --repo "$REPO" --status in_progress --limit 5
+  echo
+  echo -ne "  ${C}${B}*${X} run id to cancel  ${D}>${X} " >&2
+  read -r run_id
+  [ -z "$run_id" ] && { echo -e "  ${D}cancelled${X}"; exit 0; }
+  gh run cancel "$run_id" --repo "$REPO"
+  echo -e "  ${G}+${X} cancel requested"
+}
+
+cmd_help() {
+  echo
+  echo -e "  ${C}${B}masq${X}  ${D}-- terminal control for the pipeline${X}"
+  echo
+  echo -e "  ${B}capture${X}      trigger a capture (ghost / single / batch)"
+  echo -e "  ${B}reconstruct${X}  trigger a reconstruct from 3 shards"
+  echo -e "  ${B}status${X}       list the last 10 runs"
+  echo -e "  ${B}watch${X}        tail the newest run live"
+  echo -e "  ${B}logs${X} [id]    show a specific run log"
+  echo -e "  ${B}cancel${X}       cancel an in-progress run"
+  echo -e "  ${B}help${X}         this message"
+  echo
+}
+
+case "${1:-help}" in
+  capture)     cmd_capture ;;
+  reconstruct) cmd_reconstruct ;;
+  status)      cmd_status ;;
+  watch)       cmd_watch ;;
+  logs)        shift; cmd_logs "$@" ;;
+  cancel)      cmd_cancel ;;
+  help|-h|--help|"") cmd_help ;;
+  *)           echo -e "  ${R}unknown:${X} $1"; cmd_help; exit 1 ;;
+esac
