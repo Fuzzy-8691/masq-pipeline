@@ -1,0 +1,114 @@
+name: puppetmaster
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Minutes to keep browser alive'
+        required: true
+        default: '30'
+        type: string
+
+jobs:
+  puppet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install patchright + Chromium
+        run: |
+          pip install patchright==1.63.0
+          patchright install --with-deps chromium
+
+      - name: Install cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+
+      - name: Launch Chromium with CDP
+        run: |
+          CHROME=$(find ~/.cache/ms-playwright -type f -name chrome | head -1)
+          echo "chrome: $CHROME"
+          nohup "$CHROME" \
+            --headless=new \
+            --remote-debugging-port=9222 \
+            --remote-debugging-address=0.0.0.0 \
+            --no-sandbox --disable-dev-shm-usage \
+            --window-size=1280,800 \
+            about:blank > /tmp/chrome.log 2>&1 &
+          sleep 5
+          echo "── /json/version ──"
+          curl -s http://localhost:9222/json/version
+
+      - name: Start cloudflared tunnel
+        id: tunnel
+        run: |
+          nohup /tmp/cloudflared tunnel --url http://localhost:9222 --no-autoupdate > /tmp/cf.log 2>&1 &
+          URL=""
+          for i in $(seq 1 30); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          if [ -z "$URL" ]; then
+            echo "!! no tunnel URL"
+            cat /tmp/cf.log
+            exit 1
+          fi
+          echo "tunnel_url=$URL" >> $GITHUB_OUTPUT
+          echo
+          echo "========================================="
+          echo "  PUPPETMASTER LIVE"
+          echo "  $URL"
+          echo "========================================="
+          echo
+
+      - name: Publish URL to issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          URL="${{ steps.tunnel.outputs.tunnel_url }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
+            --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
+
+          if [ -z "$ISSUE" ]; then
+            gh issue create \
+              --repo ${{ github.repository }} \
+              --title "PUPPETMASTER LIVE" \
+              --body "Auto-managed. Do not close. Workflow updates the last comment with the live URL."
+            sleep 2
+            ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
+              --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
+          fi
+
+          gh api "repos/${{ github.repository }}/issues/$ISSUE/comments" \
+            -f body="LIVE $TIMESTAMP — $URL — expires in ${{ inputs.duration }} min"
+
+      - name: Keep alive
+        run: |
+          DURATION="${{ inputs.duration }}"
+          URL="${{ steps.tunnel.outputs.tunnel_url }}"
+          echo "browser + tunnel live for $DURATION min"
+          for i in $(seq 1 $DURATION); do
+            sleep 60
+            echo "[$i/$DURATION min] live: $URL"
+          done
+
+      - name: Mark offline
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
+            --jq '.[] | select(.title=="PUPPETMASTER LIVE") | .number' | head -1)
+          if [ -n "$ISSUE" ]; then
+            gh api "repos/${{ github.repository }}/issues/$ISSUE/comments" \
+              -f body="OFFLINE $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          fi
