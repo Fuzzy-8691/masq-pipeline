@@ -79,8 +79,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Chromium
-        run: patchright install --with-deps chromium
+      - name: Browsers
+        run: |
+          patchright install --with-deps chromium
+          python -m camoufox fetch || true
 
       - name: Write .env
         env:
