@@ -1437,6 +1437,124 @@ async def _pick_from_switcher(page, switcher_cls: str, label: str,
 
 
 async def capture_stream(url, season, episode, wait_time, headless):
+    """Dispatch to camoufox variant if CAPTURE_BROWSER=camoufox."""
+    if os.environ.get("CAPTURE_BROWSER", "patchright").lower() == "camoufox":
+        return await capture_stream_camoufox(url, season, episode, wait_time, headless)
+    return await capture_stream_patchright(url, season, episode, wait_time, headless)
+
+
+async def capture_stream_camoufox(url, season, episode, wait_time, headless):
+    """Same flow as capture_stream but on Camoufox (patched Firefox).
+
+    Reference: mirrors capture_stream_patchright. The picker uses exact-text
+    matching on Season/Episode, which works identically in Firefox DOM.
+    """
+    from camoufox.async_api import AsyncCamoufox
+
+    captured = []
+    referer = url
+    cookie_header = ""
+
+    async with AsyncCamoufox(headless=headless, geoip=True) as browser:
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        def on_req(req):
+            u = req.url
+            if any(ext in u.lower() for ext in STREAM_EXTS) and u not in captured:
+                captured.append(u)
+
+        page.on("request", on_req)
+
+        base_url = url.split("#", 1)[0]
+        try:
+            await page.goto(base_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"    [!] Navigation: {e}")
+            await browser.close()
+            return None, "", referer
+
+        await page.wait_for_timeout(10000)
+        try:
+            await page.evaluate(_strip_overlay_js())
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
+
+        print("    [nav] clicking #shows-external-player-link -> /play/")
+        try:
+            await page.locator("#shows-external-player-link").first.click(
+                timeout=8000, force=True)
+        except Exception as e:
+            print(f"    [nav] failed: {e}")
+            await browser.close()
+            return None, "", referer
+
+        for _ in range(20):
+            await page.wait_for_timeout(1000)
+            if "/play/" in page.url:
+                break
+        await page.wait_for_timeout(3000)
+        print(f"    [nav] /play/ loaded: {page.url}")
+
+        await _dismiss_ad_if_present(page, timeout=20.0)
+        await page.wait_for_timeout(8000)
+        await _dismiss_ad_if_present(page, timeout=15.0)
+        await page.wait_for_timeout(500)
+
+        print(f"    [pick] selecting Season {season} Episode {episode}")
+
+        picked_season = await _pick_from_switcher(
+            page, "seasons-switcher", "Season", season, context=context)
+        if not picked_season:
+            print(f"    [!!] season pick failed")
+
+        await _dismiss_ad_if_present(page, timeout=12.0)
+        await page.wait_for_timeout(8000)
+
+        picked_episode = await _pick_from_switcher(
+            page, "episodes-switcher", "Episode", episode, context=context)
+        if not picked_episode:
+            print(f"    [!!] episode pick failed")
+
+        await _dismiss_ad_if_present(page, timeout=12.0)
+        await page.wait_for_timeout(8000)
+
+        pat = re.compile(rf"-s0*{season}-e0*{episode}(?:[-/._]|$)", re.I)
+        deadline = time.time() + wait_time
+        while time.time() < deadline:
+            await page.wait_for_timeout(2000)
+            if [u for u in captured if pat.search(u)]:
+                await page.wait_for_timeout(3000)
+                break
+
+        if captured:
+            cookies = await context.cookies()
+            cookie_header = "; ".join(
+                f"{c.get('name', '')}={c.get('value', '')}" for c in cookies
+            )
+
+        await browser.close()
+
+    if not captured:
+        return None, "", referer
+
+    print(f"    [debug] captured {len(captured)} stream URL(s):")
+    for u in captured:
+        print(f"      • {u}")
+
+    pat = re.compile(rf"-s0*{season}-e0*{episode}(?:[-/._]|$)", re.I)
+    wanted = [u for u in captured if ".m3u8" in u and pat.search(u)]
+    if not wanted:
+        print(f"    [!!] no captured stream matches S{season:02d}E{episode:02d}")
+        return None, cookie_header, referer
+
+    stream = wanted[-1]
+    print(f"    [picked] {stream}")
+    return stream, cookie_header, referer
+
+
+async def capture_stream_patchright(url, season, episode, wait_time, headless):
     """TV capture flow (matches the new site layout):
 
       1. Show page → click #shows-external-player-link
@@ -1632,6 +1750,91 @@ async def capture_stream(url, season, episode, wait_time, headless):
 
 # ============================================================
 async def capture_movie_stream(url, wait_time, headless):
+    if os.environ.get("CAPTURE_BROWSER", "patchright").lower() == "camoufox":
+        return await capture_movie_stream_camoufox(url, wait_time, headless)
+    return await capture_movie_stream_patchright(url, wait_time, headless)
+
+
+async def capture_movie_stream_camoufox(url, wait_time, headless):
+    """Movie capture flow on Camoufox."""
+    from camoufox.async_api import AsyncCamoufox
+
+    captured = []
+    referer = url
+    cookie_header = ""
+
+    async with AsyncCamoufox(headless=headless, geoip=True) as browser:
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        def on_req(req):
+            u = req.url
+            if any(ext in u.lower() for ext in STREAM_EXTS) and u not in captured:
+                captured.append(u)
+
+        page.on("request", on_req)
+
+        base_url = url.split("#", 1)[0]
+        try:
+            await page.goto(base_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"    [!] Navigation: {e}")
+            await browser.close()
+            return None, "", referer
+
+        await page.wait_for_timeout(15000)
+        try:
+            await page.evaluate(_strip_overlay_js())
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
+
+        for attempt in range(3):
+            clicked = await click_play(page)
+            if clicked:
+                break
+            await page.wait_for_timeout(3000)
+
+        await page.wait_for_timeout(2500)
+        await dismiss_ad_overlay(page, timeout=15.0)
+
+        deadline = time.time() + wait_time
+        while time.time() < deadline:
+            await page.wait_for_timeout(2000)
+            if captured:
+                await page.wait_for_timeout(6000)
+                break
+
+        if not captured:
+            await click_play(page)
+            await page.wait_for_timeout(10000)
+
+        if captured:
+            cookies = await context.cookies()
+            cookie_header = "; ".join(
+                f"{c.get('name', '')}={c.get('value', '')}" for c in cookies
+            )
+
+        await browser.close()
+
+    if not captured:
+        return None, "", referer
+
+    print(f"    [debug] captured {len(captured)} stream URL(s):")
+    for u in captured:
+        print(f"      • {u}")
+
+    m3u8s = [u for u in captured if ".m3u8" in u]
+    if not m3u8s:
+        print(f"    [!!] no m3u8 captured")
+        return None, cookie_header, referer
+
+    stream = m3u8s[-1]
+    print(f"    [picked] {stream}")
+    return stream, cookie_header, referer
+
+
+async def capture_movie_stream_patchright(url, wait_time, headless):
     captured = []
     referer = url
     cookie_header = ""
