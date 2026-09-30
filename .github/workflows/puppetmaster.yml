@@ -39,6 +39,7 @@ jobs:
             --remote-debugging-port=9222 \
             --remote-debugging-address=0.0.0.0 \
             --no-sandbox --disable-dev-shm-usage \
+            --remote-allow-origins=* \
             --window-size=1280,800 \
             about:blank > /tmp/chrome.log 2>&1 &
           sleep 5
@@ -48,7 +49,7 @@ jobs:
       - name: Start cloudflared tunnel
         id: tunnel
         run: |
-          nohup /tmp/cloudflared tunnel --url http://localhost:9222 --no-autoupdate > /tmp/cf.log 2>&1 &
+          nohup /tmp/cloudflared tunnel --url http://localhost:9222 --no-autoupdate --http-host-header localhost:9222 > /tmp/cf.log 2>&1 &
           URL=""
           for i in $(seq 1 30); do
             URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -1)
