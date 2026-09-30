@@ -4197,15 +4197,15 @@ async def run_upload_ghost_movie(url, title, year, headless, wait_time, master):
 # ============================================================
 # ghost reconstruct
 # ============================================================
-def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
-    """Pure-HTTP dlink resolver. Returns a direct download URL, or ''."""
+def _resolve_dlink_http_sync(account_n: int, remote_path: str):
+    """Pure-HTTP dlink resolver. Returns (dlink, cookie_header) or ("", "")."""
     import requests as _req
 
     raw = _read_env_value(f"TERABOX_{account_n}_COOKIE")
     if not raw and account_n == 1:
         raw = _read_env_value("COOKIE_JSON") or _read_env_value("NDUS")
     if not raw:
-        return ""
+        return "", ""
     ndus = raw
     if raw.startswith("{"):
         try:
@@ -4213,7 +4213,7 @@ def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
         except Exception:
             pass
     if not ndus:
-        return ""
+        return "", ""
 
     sess = _req.Session()
     sess.headers.update({
@@ -4225,7 +4225,7 @@ def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
 
     r = sess.get(f"{WEB_HOST}/main", timeout=30, allow_redirects=True)
     if r.status_code != 200:
-        return ""
+        return "", ""
     html = r.text
 
     js_token = ""
@@ -4243,7 +4243,7 @@ def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
         if m:
             js_token = m.group(1)
     if not js_token:
-        return ""
+        return "", ""
 
     remote_dir  = os.path.dirname(remote_path) or "/"
     remote_name = os.path.basename(remote_path)
@@ -4276,7 +4276,10 @@ def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
                 if it.get("server_filename") == remote_name:
                     for k in ("dlink", "downloadLink", "download_link"):
                         if it.get(k):
-                            return it[k]
+                            cookie_header = "; ".join(
+                                f"{c.name}={c.value}" for c in sess.cookies
+                            )
+                            return it[k], cookie_header
     except Exception as e:
         print(f"  [i] /api/list?dlink=1 failed: {e}")
 
@@ -4296,11 +4299,14 @@ def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
                 for it in info:
                     for k in ("dlink", "downloadLink", "download_link"):
                         if it.get(k):
-                            return it[k]
+                            cookie_header = "; ".join(
+                                f"{c.name}={c.value}" for c in sess.cookies
+                            )
+                            return it[k], cookie_header
     except Exception as e:
         print(f"  [i] /api/filemetas failed: {e}")
 
-    return ""
+    return "", ""
 
 
 async def _capture_one_dlink_via_http(
@@ -4313,7 +4319,7 @@ async def _capture_one_dlink_via_http(
     print(f"\n  [*] HTTP resolving dlink for account {account_n} ...")
     print(f"      path: {remote_path}")
 
-    dlink = await asyncio.to_thread(
+    dlink, cookie_header = await asyncio.to_thread(
         _resolve_dlink_http_sync, account_n, remote_path
     )
     if not dlink:
@@ -4321,9 +4327,12 @@ async def _capture_one_dlink_via_http(
         return None, "", {}
 
     print(f"      dlink: {dlink[:100]}...")
+    print(f"      cookies: {len(cookie_header)} chars")
 
-    print(f"  [*] resolving redirect ...")
-    info = resolve_redirect(dlink, referer=f"{WEB_HOST}/main")
+    print(f"  [*] resolving redirect (with cookies) ...")
+    info = resolve_redirect(
+        dlink, cookies=cookie_header, referer=f"{WEB_HOST}/main"
+    )
     if info.get("success"):
         print_redirect_info(info)
         url = info["redirect_url"]
@@ -4333,12 +4342,16 @@ async def _capture_one_dlink_via_http(
             out_filename=out, is_redirect=True,
         )
     else:
-        print(f"  [i] redirect failed — trying dlink directly")
+        print(f"  [i] redirect failed — trying dlink directly (with cookies)")
         path = download_with_aria2(
-            dlink, save_dir, threads=threads, out_filename=out_name,
+            dlink, save_dir,
+            referer=f"{WEB_HOST}/main",
+            cookies=cookie_header,
+            threads=threads,
+            out_filename=out_name,
         )
 
-    return path, "", {}
+    return path, cookie_header, {}
 
 
 async def _capture_one_dlink(
