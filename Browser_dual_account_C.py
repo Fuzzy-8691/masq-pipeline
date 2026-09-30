@@ -1382,12 +1382,18 @@ async def _pick_from_switcher(page, switcher_cls: str, label: str,
         for reopen_try in range(1, 5):
             for txt in (f"{label} {target_num}",
                         f"{label} {target_num:02d}"):
+                # EXACT text match — quoted. Without quotes, "Season 1"
+                # also matches "Season 10", "Season 19", etc.
+                exact = f'"{txt}"'
                 try:
-                    loc = page.locator(f"text={txt}").last
-                    if await loc.count() > 0:
-                        await loc.click(timeout=4000, force=True)
+                    loc = page.locator(f"text={exact}")
+                    cnt = await loc.count()
+                    if cnt > 0:
+                        # prefer the FIRST match (topmost in the list)
+                        await loc.first.click(timeout=4000, force=True)
                         print(f"    [pick/{label}] clicked {txt!r} "
-                              f"(attempt {attempt}, reopen {reopen_try})")
+                              f"(exact, {cnt} match(es), "
+                              f"attempt {attempt}, reopen {reopen_try})")
                         await page.wait_for_timeout(1500)
                         clicked = True
                         break
