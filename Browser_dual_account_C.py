@@ -4197,6 +4197,150 @@ async def run_upload_ghost_movie(url, title, year, headless, wait_time, master):
 # ============================================================
 # ghost reconstruct
 # ============================================================
+def _resolve_dlink_http_sync(account_n: int, remote_path: str) -> str:
+    """Pure-HTTP dlink resolver. Returns a direct download URL, or ''."""
+    import requests as _req
+
+    raw = _read_env_value(f"TERABOX_{account_n}_COOKIE")
+    if not raw and account_n == 1:
+        raw = _read_env_value("COOKIE_JSON") or _read_env_value("NDUS")
+    if not raw:
+        return ""
+    ndus = raw
+    if raw.startswith("{"):
+        try:
+            ndus = json.loads(raw).get("ndus", "")
+        except Exception:
+            pass
+    if not ndus:
+        return ""
+
+    sess = _req.Session()
+    sess.headers.update({
+        "User-Agent": UA_UPLOAD,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    sess.cookies.set("ndus", ndus, domain=".terabox.com")
+
+    r = sess.get(f"{WEB_HOST}/main", timeout=30, allow_redirects=True)
+    if r.status_code != 200:
+        return ""
+    html = r.text
+
+    js_token = ""
+    bd_token = ""
+    m = re.search(r'"jsToken":"([^"]+)"', html)
+    if m:
+        m2 = re.search(r'fn\("([A-Fa-f0-9]+)"\)', unquote(m.group(1)))
+        if m2:
+            js_token = m2.group(1)
+    m = re.search(r'"bdstoken":"([A-Fa-f0-9]+)"', html)
+    if m:
+        bd_token = m.group(1)
+    if not js_token:
+        m = re.search(r'fn%28%22([A-Fa-f0-9]{30,})%22%29', html)
+        if m:
+            js_token = m.group(1)
+    if not js_token:
+        return ""
+
+    remote_dir  = os.path.dirname(remote_path) or "/"
+    remote_name = os.path.basename(remote_path)
+
+    base = {
+        "app_id": APP_ID,
+        "channel": CHANNEL,
+        "clienttype": CLIENTTYPE,
+        "web": WEB,
+        "bdstoken": bd_token,
+        "jsToken": js_token,
+        "dir": remote_dir,
+        "order": "time",
+        "desc": "1",
+        "showempty": "0",
+        "page": "1",
+        "num": "200",
+    }
+
+    # attempt 1: /api/list?dlink=1
+    try:
+        p = dict(base); p["dlink"] = "1"
+        qs = "&".join(f"{k}={_req.utils.quote(str(v), safe='')}" for k, v in p.items())
+        rr = sess.get(f"{WEB_HOST}/api/list?{qs}", timeout=30,
+                      headers={"Referer": f"{WEB_HOST}/main",
+                               "X-Requested-With": "XMLHttpRequest"})
+        j = rr.json()
+        if j.get("errno") == 0:
+            for it in j.get("list", []):
+                if it.get("server_filename") == remote_name:
+                    for k in ("dlink", "downloadLink", "download_link"):
+                        if it.get(k):
+                            return it[k]
+    except Exception as e:
+        print(f"  [i] /api/list?dlink=1 failed: {e}")
+
+    # attempt 2: /api/filemetas
+    try:
+        p = dict(base)
+        p["target"] = json.dumps([remote_path])
+        p["dlink"] = "1"
+        qs = "&".join(f"{k}={_req.utils.quote(str(v), safe='')}" for k, v in p.items())
+        rr = sess.get(f"{WEB_HOST}/api/filemetas?{qs}", timeout=30,
+                      headers={"Referer": f"{WEB_HOST}/main",
+                               "X-Requested-With": "XMLHttpRequest"})
+        j = rr.json()
+        if j.get("errno") == 0:
+            info = j.get("info") or []
+            if isinstance(info, list):
+                for it in info:
+                    for k in ("dlink", "downloadLink", "download_link"):
+                        if it.get(k):
+                            return it[k]
+    except Exception as e:
+        print(f"  [i] /api/filemetas failed: {e}")
+
+    return ""
+
+
+async def _capture_one_dlink_via_http(
+    account_n: int, save_dir: Path, threads: int,
+    remote_path: str, out_name: str,
+) -> tuple[Path | None, str, dict]:
+    """Pure-HTTP shard download. No browser, no clicking."""
+    set_active_account(account_n)
+
+    print(f"\n  [*] HTTP resolving dlink for account {account_n} ...")
+    print(f"      path: {remote_path}")
+
+    dlink = await asyncio.to_thread(
+        _resolve_dlink_http_sync, account_n, remote_path
+    )
+    if not dlink:
+        print(f"  [!] HTTP dlink resolution failed for account {account_n}")
+        return None, "", {}
+
+    print(f"      dlink: {dlink[:100]}...")
+
+    print(f"  [*] resolving redirect ...")
+    info = resolve_redirect(dlink, referer=f"{WEB_HOST}/main")
+    if info.get("success"):
+        print_redirect_info(info)
+        url = info["redirect_url"]
+        out = out_name or info.get("filename", "")
+        path = download_with_aria2(
+            url, save_dir, threads=threads,
+            out_filename=out, is_redirect=True,
+        )
+    else:
+        print(f"  [i] redirect failed — trying dlink directly")
+        path = download_with_aria2(
+            dlink, save_dir, threads=threads, out_filename=out_name,
+        )
+
+    return path, "", {}
+
+
 async def _capture_one_dlink(
     account_n: int, save_dir: Path, threads: int, out_name: str = ""
 ) -> tuple[Path | None, str, dict]:
@@ -5014,15 +5158,28 @@ async def ghost_reconstruct(ghost_folder: str, save_dir: Path, threads: int = 16
     local_shard_paths: list[Path] = []
     sessions: list[tuple[int, str, dict]] = []
 
+    use_http = (os.environ.get("PIPELINE_HTTP_DLINK") == "1"
+                or os.environ.get("PIPELINE_NONINTERACTIVE") == "1")
+
     for i in range(GHOST_SHARD_COUNT):
         n = i + 1
         shard_name = shard_filename(folder_basename, i + 1, GHOST_SHARD_COUNT)
         print(f"\n{'#' * 62}")
         print(f"#  SHARD {n}/{GHOST_SHARD_COUNT}  (account {n})")
         print(f"{'#' * 62}")
-        path, cookie_header, tokens = await _capture_one_dlink(
-            n, save_dir, threads, out_name=shard_name
-        )
+
+        if use_http:
+            remote_path = f"{ghost_folder.rstrip('/')}/{shard_name}"
+            path, cookie_header, tokens = await _capture_one_dlink_via_http(
+                n, save_dir, threads,
+                remote_path=remote_path,
+                out_name=shard_name,
+            )
+        else:
+            path, cookie_header, tokens = await _capture_one_dlink(
+                n, save_dir, threads, out_name=shard_name
+            )
+
         if path is None:
             print(f"\n  ❌ failed to fetch shard {n}. Aborting reconstruct.")
             notify_job_end("failed", f"shard {n} fetch failed")
