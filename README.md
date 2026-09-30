@@ -39,3 +39,16 @@ Actions tab -> pipeline -> Run workflow. Fill in:
     gh workflow run pipeline.yml \
       -f url="https://www.lookmovie2.to/shows/view/..." \
       -f mode=ghost -f show=GH -f season=6 -f episodes=9
+
+
+## Reconstruct workflow
+
+Actions tab -> **reconstruct** -> Run workflow. Inputs:
+
+- `ghost_folder`: full TeraBox path (e.g. `/_Rescue_Uploads/encrypted/Ghosts/<ghost_id>`)
+- `passphrase`: the same one used at capture time
+- `dest_account`: which TeraBox account receives the decrypted MP4 (1/2/3)
+- `dest_dir`: remote folder for the MP4 (e.g. `/decrypted`)
+- `keep_shards`: leave shards on TeraBox after reconstruct
+
+Output: the decrypted MP4 uploaded to `dest_account:dest_dir`. Nothing touches your local machine.

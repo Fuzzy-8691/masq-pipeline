@@ -108,7 +108,7 @@ SUBMIT_SELECTORS = [
     'button:has-text("登录")',
     'button[type="submit"]',
 ]
-DEFAULT_REMOTE_ROOT = "/_Rescue_Uploads"
+DEFAULT_REMOTE_ROOT = os.environ.get("DEFAULT_REMOTE_ROOT", "/_Rescue_Uploads")
 
 MAX_RAM_BYTES = 2 * 1024 * 1024 * 1024
 MAX_RAM_BYTES_ENCRYPT = 1 * 1024 * 1024 * 1024
@@ -3000,6 +3000,15 @@ def remote_file_exists(uploader, remote_dir, filename, size=None):
 
 
 def pick_remote_folder(uploader, suggested=""):
+    env_override = os.environ.get("PIPELINE_REMOTE_DIR", "").strip()
+    if env_override:
+        print("\n" + "=" * 60)
+        print("  REMOTE FOLDER")
+        print("=" * 60)
+        print(f"  [i] PIPELINE_REMOTE_DIR override: {env_override}")
+        final = ensure_remote_path(uploader, env_override)
+        return final if final else "/"
+
     print("\n" + "=" * 60)
     print("  REMOTE FOLDER")
     print("=" * 60)
