@@ -134,6 +134,10 @@ SALT_LEN = 16
 NONCE_LEN = 12
 
 # ghost mode
+# ── adaptive browser chain ──
+BROWSER_STATS_PATH = Path(__file__).resolve().parent / "_state" / "browser_stats.json"
+DEFAULT_BROWSER_CHAIN = ["camoufox", "patchright", "cloakbrowser"]
+
 GHOST_MAGIC = b"EETBGHOST"
 GHOST_VERSION = 1
 GHOST_SHARD_COUNT = 3
@@ -1436,13 +1440,120 @@ async def _pick_from_switcher(page, switcher_cls: str, label: str,
     return False
 
 
+def _domain_of(url: str) -> str:
+    from urllib.parse import urlparse
+    try:
+        return urlparse(url).netloc or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _load_browser_stats() -> dict:
+    try:
+        return json.loads(BROWSER_STATS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _browser_chain_for(url: str, forced: str = "") -> list:
+    """Return ordered list of browsers to try. If `forced` is one of the
+    known browsers, return just [forced]. Otherwise rank by domain stats."""
+    forced = (forced or "").lower()
+    if forced in DEFAULT_BROWSER_CHAIN:
+        return [forced]
+
+    data = _load_browser_stats()
+    domain = _domain_of(url)
+    stats = data.get(domain, {}).get("stats", {})
+
+    scored = []
+    for b in DEFAULT_BROWSER_CHAIN:
+        s = stats.get(b, {})
+        succ = int(s.get("success", 0))
+        fail = int(s.get("fail", 0))
+        total = succ + fail
+        # require min 3 samples before trusting the rate
+        rate = (succ / total) if total >= 3 else 0.5
+        scored.append((rate, total, b))
+
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    return [b for _, _, b in scored]
+
+
+def _record_browser_result(url: str, browser: str, success: bool) -> None:
+    """Update the per-domain browser stats file."""
+    try:
+        BROWSER_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        data = _load_browser_stats()
+        domain = _domain_of(url)
+        entry = data.setdefault(domain, {"stats": {}})
+        s = entry["stats"].setdefault(
+            browser, {"success": 0, "fail": 0, "last_fail": None}
+        )
+        if success:
+            s["success"] = int(s.get("success", 0)) + 1
+        else:
+            s["fail"] = int(s.get("fail", 0)) + 1
+            s["last_fail"] = iso_now()
+        data["last_updated"] = iso_now()
+        BROWSER_STATS_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        print(f"    [stats] record failed: {e}")
+
+
+def _find_cloakbrowser_chrome():
+    """Locate CloakBrowser's Chromium binary (external drive)."""
+    import os
+    candidates = []
+    for base in [
+        Path(os.path.expanduser("~/.cloakbrowser")),
+        Path("/Volumes/Backup_Plus/BROWSER_TEST/cloakbrowser_data"),
+    ]:
+        if not base.exists():
+            continue
+        for pat in (
+            "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chromium-*/chrome-mac*/*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        ):
+            candidates.extend(base.glob(pat))
+    return candidates[0] if candidates else None
+
+
 async def capture_stream(url, season, episode, wait_time, headless):
-    """Dispatch to camoufox variant if CAPTURE_BROWSER=camoufox."""
-    chosen = os.environ.get("CAPTURE_BROWSER", "camoufox").lower()
-    print(f"    [browser] capture_stream -> {chosen}")
-    if chosen == "camoufox":
-        return await capture_stream_camoufox(url, season, episode, wait_time, headless)
-    return await capture_stream_patchright(url, season, episode, wait_time, headless)
+    """Adaptive chain: try browsers in order, fall back on failure.
+
+    Set CAPTURE_BROWSER=camoufox|patchright|cloakbrowser to force one.
+    Otherwise ranks by per-domain success rate from _state/browser_stats.json.
+    """
+    forced = os.environ.get("CAPTURE_BROWSER", "").lower()
+    chain = _browser_chain_for(url, forced=forced)
+    print(f"    [browser] chain: {' -> '.join(chain)}")
+
+    last_err = None
+    for browser in chain:
+        try:
+            if browser == "camoufox":
+                result = await capture_stream_camoufox(url, season, episode, wait_time, headless)
+            elif browser == "patchright":
+                result = await capture_stream_patchright(url, season, episode, wait_time, headless)
+            elif browser == "cloakbrowser":
+                result = await capture_stream_cloakbrowser(url, season, episode, wait_time, headless)
+            else:
+                continue
+
+            if result and result[0]:
+                _record_browser_result(url, browser, True)
+                return result
+
+            _record_browser_result(url, browser, False)
+            print(f"    [!] {browser}: no stream — trying next in chain")
+        except Exception as e:
+            _record_browser_result(url, browser, False)
+            print(f"    [!] {browser}: {type(e).__name__}: {e}")
+            last_err = e
+
+    print(f"    [X] all browsers failed (chain: {chain})")
+    return None, "", url
 
 
 async def capture_stream_camoufox(url, season, episode, wait_time, headless):
@@ -1459,6 +1570,130 @@ async def capture_stream_camoufox(url, season, episode, wait_time, headless):
 
     async with AsyncCamoufox(headless=headless, geoip=True) as browser:
         context = await browser.new_context()
+        page = await context.new_page()
+
+        def on_req(req):
+            u = req.url
+            if any(ext in u.lower() for ext in STREAM_EXTS) and u not in captured:
+                captured.append(u)
+
+        page.on("request", on_req)
+
+        base_url = url.split("#", 1)[0]
+        try:
+            await page.goto(base_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"    [!] Navigation: {e}")
+            await browser.close()
+            return None, "", referer
+
+        await page.wait_for_timeout(10000)
+        try:
+            await page.evaluate(_strip_overlay_js())
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
+
+        print("    [nav] clicking #shows-external-player-link -> /play/")
+        try:
+            await page.locator("#shows-external-player-link").first.click(
+                timeout=8000, force=True)
+        except Exception as e:
+            print(f"    [nav] failed: {e}")
+            await browser.close()
+            return None, "", referer
+
+        for _ in range(20):
+            await page.wait_for_timeout(1000)
+            if "/play/" in page.url:
+                break
+        await page.wait_for_timeout(3000)
+        print(f"    [nav] /play/ loaded: {page.url}")
+
+        await _dismiss_ad_if_present(page, timeout=20.0)
+        await page.wait_for_timeout(8000)
+        await _dismiss_ad_if_present(page, timeout=15.0)
+        await page.wait_for_timeout(500)
+
+        print(f"    [pick] selecting Season {season} Episode {episode}")
+
+        picked_season = await _pick_from_switcher(
+            page, "seasons-switcher", "Season", season, context=context)
+        if not picked_season:
+            print(f"    [!!] season pick failed")
+
+        await _dismiss_ad_if_present(page, timeout=12.0)
+        await page.wait_for_timeout(8000)
+
+        picked_episode = await _pick_from_switcher(
+            page, "episodes-switcher", "Episode", episode, context=context)
+        if not picked_episode:
+            print(f"    [!!] episode pick failed")
+
+        await _dismiss_ad_if_present(page, timeout=12.0)
+        await page.wait_for_timeout(8000)
+
+        pat = re.compile(rf"-s0*{season}-e0*{episode}(?:[-/._]|$)", re.I)
+        deadline = time.time() + wait_time
+        while time.time() < deadline:
+            await page.wait_for_timeout(2000)
+            if [u for u in captured if pat.search(u)]:
+                await page.wait_for_timeout(3000)
+                break
+
+        if captured:
+            cookies = await context.cookies()
+            cookie_header = "; ".join(
+                f"{c.get('name', '')}={c.get('value', '')}" for c in cookies
+            )
+
+        await browser.close()
+
+    if not captured:
+        return None, "", referer
+
+    print(f"    [debug] captured {len(captured)} stream URL(s):")
+    for u in captured:
+        print(f"      • {u}")
+
+    pat = re.compile(rf"-s0*{season}-e0*{episode}(?:[-/._]|$)", re.I)
+    wanted = [u for u in captured if ".m3u8" in u and pat.search(u)]
+    if not wanted:
+        print(f"    [!!] no captured stream matches S{season:02d}E{episode:02d}")
+        return None, cookie_header, referer
+
+    stream = wanted[-1]
+    print(f"    [picked] {stream}")
+    return stream, cookie_header, referer
+
+
+async def capture_stream_cloakbrowser(url, season, episode, wait_time, headless):
+    """CloakBrowser's patched Chromium via async Playwright.
+
+    We bypass CloakBrowser's own sync wrapper — the fingerprints are
+    baked into the binary. We just launch it directly.
+    """
+    from playwright.async_api import async_playwright
+
+    chrome_path = _find_cloakbrowser_chrome()
+    if not chrome_path:
+        raise RuntimeError("CloakBrowser binary not found on external drive")
+
+    captured = []
+    referer = url
+    cookie_header = ""
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            executable_path=str(chrome_path),
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(
+            user_agent=UA_CAPTURE,
+            viewport={"width": 1366, "height": 900},
+            locale="en-US",
+        )
         page = await context.new_page()
 
         def on_req(req):
