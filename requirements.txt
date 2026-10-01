@@ -4,3 +4,4 @@ cryptography>=44
 python-dotenv>=1.0
 yt-dlp>=2024.1
 camoufox[geoip]>=0.5
+cloakbrowser>=0.5.11

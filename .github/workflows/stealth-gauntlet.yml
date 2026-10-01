@@ -22,6 +22,8 @@ jobs:
           patchright install --with-deps chromium
           echo "── camoufox ──"
           python -m camoufox fetch
+          echo "── cloakbrowser warmup ──"
+          python3 -c "from cloakbrowser import launch; b = launch(headless=True); b.close(); print('cloakbrowser ready')" || echo "cloakbrowser warmup deferred to gauntlet"
 
       - name: Run gauntlet
         run: |

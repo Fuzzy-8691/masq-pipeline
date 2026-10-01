@@ -41,15 +41,17 @@ def extract_verdicts_sannysoft(text):
     return out
 
 
-def extract_verdicts_block(text):
+def extract_verdicts_block(text, title=""):
     """Detect whether we got blocked or got real content."""
-    low = text.lower()
+    low = (text or "").lower() + " " + (title or "").lower()
     blocks = [
         "access denied", "are you a robot", "unusual traffic",
         "verify you are human", "please verify", "cf-chl",
         "checking your browser", "just a moment",
         "px-captcha", "press & hold", "blocked",
         "bot detection", "attention required",
+        "your browsing activity has been paused",
+        "challenge required", "enable javascript and cookies",
     ]
     hits = [b for b in blocks if b in low]
     ok = [
@@ -135,7 +137,7 @@ async def run_patchright():
             if label == "creepjs":
                 row["verdicts"] = extract_verdicts_creepjs(text)
             if label in ("zillow", "ticketmaster", "nopecha-cf", "nopecha-rc"):
-                row["verdicts"] = extract_verdicts_block(text)
+                row["verdicts"] = extract_verdicts_block(text, title)
             (OUT / f"patchright_{label}.txt").write_text(text[:8000])
             results.append(row)
             print(f"  title={title!r}  ms={ms}  err={err or 'none'}")
@@ -169,11 +171,73 @@ async def run_camoufox():
             if label == "creepjs":
                 row["verdicts"] = extract_verdicts_creepjs(text)
             if label in ("zillow", "ticketmaster", "nopecha-cf", "nopecha-rc"):
-                row["verdicts"] = extract_verdicts_block(text)
+                row["verdicts"] = extract_verdicts_block(text, title)
             (OUT / f"camoufox_{label}.txt").write_text(text[:8000])
             results.append(row)
             print(f"  title={title!r}  ms={ms}  err={err or 'none'}")
 
+    return results
+
+
+def run_cloakbrowser():
+    """CloakBrowser uses the sync Playwright API — run it in a thread."""
+    from cloakbrowser import launch
+
+    results = []
+    browser = launch(headless=True)
+    try:
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 900},
+        )
+        page = context.new_page()
+
+        for label, url, wait_s in SITES:
+            print(f"[cloakbrowser] {label} -> {url}")
+            t0 = time.perf_counter()
+            err = ""
+            title = ""
+            text = ""
+            try:
+                page.goto(url, wait_until="domcontentloaded",
+                          timeout=NAV_TIMEOUT_MS)
+                page.wait_for_timeout(wait_s * 1000)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+            elapsed = int((time.perf_counter() - t0) * 1000)
+
+            try:
+                title = page.title()
+            except Exception:
+                pass
+            try:
+                text = page.evaluate("() => document.body.innerText || ''")
+            except Exception:
+                pass
+
+            try:
+                page.screenshot(
+                    path=str(OUT / f"cloakbrowser_{label}.png"),
+                    full_page=True,
+                )
+            except Exception:
+                pass
+
+            row = {"browser": "cloakbrowser", "site": label, "url": url,
+                   "title": title, "elapsed_ms": elapsed, "error": err}
+            if label == "sannysoft":
+                row["verdicts"] = extract_verdicts_sannysoft(text)
+            if label == "creepjs":
+                row["verdicts"] = extract_verdicts_creepjs(text)
+            if label in ("zillow", "ticketmaster", "nopecha-cf", "nopecha-rc"):
+                row["verdicts"] = extract_verdicts_block(text, title)
+            (OUT / f"cloakbrowser_{label}.txt").write_text(text[:8000])
+            results.append(row)
+            print(f"  title={title!r}  ms={elapsed}  err={err or 'none'}")
+    finally:
+        try:
+            browser.close()
+        except Exception:
+            pass
     return results
 
 
@@ -195,6 +259,15 @@ async def main():
         except Exception as e:
             print(f"[!] camoufox crashed: {e}")
             results.append({"browser": "camoufox", "site": "*",
+                            "error": str(e)})
+
+    if which in ("all", "cloakbrowser"):
+        try:
+            cb = await asyncio.to_thread(run_cloakbrowser)
+            results += cb
+        except Exception as e:
+            print(f"[!] cloakbrowser crashed: {e}")
+            results.append({"browser": "cloakbrowser", "site": "*",
                             "error": str(e)})
 
     (OUT / "results.json").write_text(json.dumps(results, indent=2))

@@ -51,3 +51,41 @@ Browser_dual_account_B.py
 _build_pack.py
 _upload_pack.py
 _pack_config.json
+
+# ── local test files ──
+_test_*.py
+
+# ── every .bak variant ──
+*.bak
+*.bak2
+*.bak3
+*.bak4
+*.bak5
+*.bakBrowser
+*.bakCamoufox
+*.bakD
+*.bakD2
+*.bakD3
+*.bakD4
+*.bakSeasonFix
+*.bakBlockFix
+*.bakCloak
+*.bakAll3
+*.bakCI
+*.bakC_http
+*.bakSeasonFix
+*.baseline
+*.pre
+
+# ── large local data ──
+cloakbrowser_data/
+camoufox_data/
+patchright/
+venv/
+bin/
+_pack/
+_cache/
+
+# ── per-run outputs ──
+uploads.csv
+/tmp/

@@ -26,8 +26,19 @@ HTML = """<!DOCTYPE html>
 <style>
   body { background: #0a0a0a; margin: 0; color: #ccc;
          font-family: ui-monospace, monospace; }
-  #status { padding: 10px 14px; color: #0f8; font-size: 13px;
+  #status { padding: 8px 14px; color: #0f8; font-size: 12px;
             border-bottom: 1px solid #222; }
+  #urlbar { display: flex; gap: 8px; padding: 10px 14px;
+            background: #111; border-bottom: 1px solid #222; }
+  #url { flex: 1; background: #000; color: #0f8; border: 1px solid #333;
+         padding: 6px 10px; font-family: inherit; font-size: 13px;
+         outline: none; border-radius: 3px; }
+  #url:focus { border-color: #0f8; }
+  #go { background: #0f8; color: #000; border: 0; padding: 6px 14px;
+        font-family: inherit; font-weight: bold; cursor: pointer;
+        border-radius: 3px; font-size: 13px; }
+  #go:hover { background: #0fa; }
+  #kbhint { padding: 0 14px 6px; color: #555; font-size: 11px; }
   #stage { display: flex; justify-content: center; padding: 20px; }
   #screen { max-width: 100%; border: 1px solid #333;
             cursor: crosshair; image-rendering: pixelated; }
@@ -36,8 +47,13 @@ HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div id="status">connecting...</div>
+<div id="urlbar">
+  <input id="url" placeholder="https://example.com" spellcheck="false" />
+  <button id="go">Go</button>
+</div>
+<div id="kbhint">click image to focus · type to send keys · Enter to navigate</div>
 <div id="stage"><img id="screen" /></div>
-<div id="hint">click the image to click inside the remote browser</div>
+<div id="hint">click the image = click in remote browser</div>
 <script>
 const TUNNEL = "__TUNNEL__";
 let ws = null;
@@ -120,17 +136,60 @@ function handleMessage(ev) {
 }
 
 const img = document.getElementById("screen");
-img.addEventListener("click", (e) => {
+const urlIn = document.getElementById("url");
+
+function imgCoords(e) {
   const rect = img.getBoundingClientRect();
   const x = Math.round((e.clientX - rect.left) / rect.width * meta.deviceWidth);
   const y = Math.round((e.clientY - rect.top) / rect.height * meta.deviceHeight);
-  send("Input.dispatchMouseEvent", {
-    type: "mousePressed", x, y, button: "left", clickCount: 1
-  });
-  send("Input.dispatchMouseEvent", {
-    type: "mouseReleased", x, y, button: "left", clickCount: 1
-  });
+  return { x, y };
+}
+
+img.addEventListener("click", (e) => {
+  const { x, y } = imgCoords(e);
+  send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 });
+
+img.addEventListener("mousemove", (e) => {
+  const { x, y } = imgCoords(e);
+  send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+});
+
+document.getElementById("go").addEventListener("click", () => {
+  let u = urlIn.value.trim();
+  if (!u) return;
+  if (!/^https?:\/\//.test(u)) u = "https://" + u;
+  urlIn.value = u;
+  send("Page.navigate", { url: u });
+});
+
+urlIn.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    document.getElementById("go").click();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (document.activeElement === urlIn) return;
+  e.preventDefault();
+  const keyMap = {
+    "Enter": "Enter", "Backspace": "Backspace", "Tab": "Tab",
+    "Escape": "Escape", "ArrowUp": "ArrowUp", "ArrowDown": "ArrowDown",
+    "ArrowLeft": "ArrowLeft", "ArrowRight": "ArrowRight"
+  };
+  if (e.key.length === 1) {
+    send("Input.dispatchKeyEvent", { type: "keyDown", text: e.key, key: e.key });
+    send("Input.dispatchKeyEvent", { type: "keyUp", key: e.key });
+  } else if (keyMap[e.key]) {
+    send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: e.key, code: e.key });
+    send("Input.dispatchKeyEvent", { type: "keyUp", key: e.key, code: e.key });
+  }
+});
+
+// auto-navigate to a starting page once we're connected
+setTimeout(() => { urlIn.value = "https://example.com"; }, 500);
 
 connect();
 </script>
