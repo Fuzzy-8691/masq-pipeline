@@ -1456,16 +1456,18 @@ def _load_browser_stats() -> dict:
 
 
 def _browser_chain_for(url: str, forced: str = "") -> list:
-    """Return ordered list of browsers to try. If `forced` is one of the
-    known browsers, return just [forced]. Otherwise rank by domain stats."""
-    forced = (forced or "").lower()
-    if forced in DEFAULT_BROWSER_CHAIN:
-        return [forced]
+    """Return ordered list of browsers to try.
 
+    - If `forced` is a known browser: put it first, then append the
+      others as fallback (so a failure still tries the next one).
+    - Otherwise: rank by per-domain success rate from browser_stats.json.
+    """
+    forced = (forced or "").lower()
     data = _load_browser_stats()
     domain = _domain_of(url)
     stats = data.get(domain, {}).get("stats", {})
 
+    # score all browsers
     scored = []
     for b in DEFAULT_BROWSER_CHAIN:
         s = stats.get(b, {})
@@ -1476,8 +1478,15 @@ def _browser_chain_for(url: str, forced: str = "") -> list:
         rate = (succ / total) if total >= 3 else 0.5
         scored.append((rate, total, b))
 
+    # sort best-first
     scored.sort(key=lambda x: (-x[0], -x[1]))
-    return [b for _, _, b in scored]
+    ranked = [b for _, _, b in scored]
+
+    # if user forced a browser, promote it to front — but keep the rest
+    if forced in DEFAULT_BROWSER_CHAIN:
+        ranked = [forced] + [b for b in ranked if b != forced]
+
+    return ranked
 
 
 def _record_browser_result(url: str, browser: str, success: bool) -> None:
