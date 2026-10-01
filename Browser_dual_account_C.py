@@ -1438,7 +1438,7 @@ async def _pick_from_switcher(page, switcher_cls: str, label: str,
 
 async def capture_stream(url, season, episode, wait_time, headless):
     """Dispatch to camoufox variant if CAPTURE_BROWSER=camoufox."""
-    chosen = os.environ.get("CAPTURE_BROWSER", "patchright").lower()
+    chosen = os.environ.get("CAPTURE_BROWSER", "camoufox").lower()
     print(f"    [browser] capture_stream -> {chosen}")
     if chosen == "camoufox":
         return await capture_stream_camoufox(url, season, episode, wait_time, headless)
@@ -1752,7 +1752,7 @@ async def capture_stream_patchright(url, season, episode, wait_time, headless):
 
 # ============================================================
 async def capture_movie_stream(url, wait_time, headless):
-    chosen = os.environ.get("CAPTURE_BROWSER", "patchright").lower()
+    chosen = os.environ.get("CAPTURE_BROWSER", "camoufox").lower()
     print(f"    [browser] capture_movie_stream -> {chosen}")
     if chosen == "camoufox":
         return await capture_movie_stream_camoufox(url, wait_time, headless)

@@ -82,11 +82,11 @@ cmd_capture() {
   episodes=$(ask "episodes (e.g. 1 or 1-5)" "1")
   wait=$(ask "seconds to wait for player" "25")
   remote_dir=$(ask "remote dir (ghost base)" "/_Rescue_Uploads/encrypted/Ghosts")
-  echo -ne "  ${C}${B}*${X} browser   ${C}${B}1${X} patchright   ${D}2${X} camoufox  ${D}>${X} " >&2
+  echo -ne "  ${C}${B}*${X} browser   ${D}1${X} patchright   ${C}${B}2${X} camoufox  ${D}>${X} " >&2
   read -r br
-  case "${br:-1}" in
-    2) browser="camoufox" ;;
-    *) browser="patchright" ;;
+  case "${br:-2}" in
+    1) browser="patchright" ;;
+    *) browser="camoufox" ;;
   esac
   pass=$(ask_secret "passphrase (masked)")
 
@@ -179,11 +179,11 @@ cmd_bulk() {
   base_dir=$(ask "base remote dir" "/_Rescue_Uploads/encrypted/FG")
   max_eps=$(ask "max episodes per season" "30")
   max_par=$(ask "max parallel jobs" "10")
-  echo -ne "  ${C}${B}*${X} browser   ${C}${B}1${X} patchright   ${D}2${X} camoufox  ${D}>${X} " >&2
+  echo -ne "  ${C}${B}*${X} browser   ${D}1${X} patchright   ${C}${B}2${X} camoufox  ${D}>${X} " >&2
   read -r br
-  case "${br:-1}" in
-    2) browser="camoufox" ;;
-    *) browser="patchright" ;;
+  case "${br:-2}" in
+    1) browser="patchright" ;;
+    *) browser="camoufox" ;;
   esac
 
   header "TRIGGER"

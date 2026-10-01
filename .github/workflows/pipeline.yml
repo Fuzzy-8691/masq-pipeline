@@ -43,7 +43,7 @@ on:
       browser:
         description: 'Browser engine'
         required: false
-        default: 'patchright'
+        default: 'camoufox'
         type: choice
         options:
           - patchright
